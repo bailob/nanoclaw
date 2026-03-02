@@ -58,3 +58,25 @@ systemctl --user restart nanoclaw
 ## Container Build Cache
 
 The container buildkit caches the build context aggressively. `--no-cache` alone does NOT invalidate COPY steps — the builder's volume retains stale files. To force a truly clean rebuild, prune the builder then re-run `./container/build.sh`.
+
+## Container Runtime
+
+**当前使用: Docker**
+
+NanoClaw使用Docker作为容器运行时。Docker提供了更好的调试工具：
+
+```bash
+# 查看运行中的容器
+docker ps | grep nanoclaw
+
+# 进入容器调试
+docker exec -it <container-name> bash
+
+# 查看容器日志
+docker logs -f <container-name>
+
+# 查看容器详细信息
+docker inspect <container-name>
+```
+
+如需切换回Apple Container，修改 `src/container-runtime.ts` 中的 `CONTAINER_RUNTIME_BIN`。
