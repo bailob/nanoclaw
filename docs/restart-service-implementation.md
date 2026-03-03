@@ -2,7 +2,13 @@
 
 ## 概述
 
-`restart_service` 是一个 MCP 工具，允许容器内的 agent 请求 NanoClaw 主进程重启，并在重启完成后发送续接消息继续对话。
+`restart_service` 是一个 MCP 工具，允许容器内的 agent 请求 NanoClaw 主进程重启，并在重启完成后通过注入"用户消息"的方式继续任务。
+
+**核心机制**：
+- Agent 在重启前拟定一个**给自己的任务指令**（如"通知用户完成"、"继续xx任务"）
+- 重启后，这个任务指令**以用户消息的形式注入**到消息数据库
+- Agent 收到这条"用户消息"后正常处理并响应
+- 用户看到的是 agent 的响应，而不是原始的任务指令
 
 **使用场景**：
 - 应用配置更改（如添加新 group、修改 trigger）
@@ -28,9 +34,13 @@ Service Manager (launchd/systemd) 自动重启
 Host Process 启动 (src/index.ts)
   ↓ checkPendingRestart()
   ↓ 读取并删除 pending-restart.json
+  ↓ 将 continuation_prompt 作为用户消息注入数据库
+  ↓ 触发 agent 处理消息 (enqueueMessageCheck)
+Agent 收到"用户消息"
+  ↓ 正常处理并生成响应
 Channel (Telegram/WhatsApp)
-  ↓ 发送 continuation_prompt
-User 收到续接消息
+  ↓ 发送 agent 的响应
+User 收到 agent 的响应（而非原始 continuation_prompt）
 ```
 
 ### 关键组件
@@ -186,7 +196,7 @@ case 'restart_service': {
 
 **存储位置**: `data/pending-restart.json`
 
-#### 5. 启动时 Continuation 检查
+#### 5. 启动时 Continuation 注入
 
 **文件**: `src/index.ts`
 
@@ -201,13 +211,23 @@ async function checkPendingRestart(): Promise<void> {
     fs.unlinkSync(pendingFile);
 
     if (data.chatJid && data.continuation_prompt) {
-      const channel = findChannel(channels, data.chatJid);
-      if (channel) {
-        await channel.sendMessage(data.chatJid, data.continuation_prompt);
-        logger.info({ chatJid: data.chatJid, groupFolder: data.groupFolder }, 'Sent restart continuation message');
-      } else {
-        logger.warn({ chatJid: data.chatJid }, 'No channel found for restart continuation message');
-      }
+      // 将 continuation_prompt 作为用户消息注入
+      const syntheticMessage: NewMessage = {
+        id: `restart-continuation-${Date.now()}`,
+        chat_jid: data.chatJid,
+        sender: data.chatJid, // 来自用户/群组
+        sender_name: 'User',
+        content: data.continuation_prompt,
+        timestamp: new Date().toISOString(),
+        is_from_me: false,
+        is_bot_message: false,
+      };
+
+      storeMessage(syntheticMessage);
+      logger.info({ chatJid: data.chatJid, groupFolder: data.groupFolder }, 'Injected restart continuation as user message');
+
+      // 触发 agent 处理这条消息
+      queue.enqueueMessageCheck(data.chatJid);
     }
   } catch (err) {
     logger.error({ err }, 'Error processing pending restart');
@@ -215,6 +235,13 @@ async function checkPendingRestart(): Promise<void> {
   }
 }
 ```
+
+**关键设计**：
+- `continuation_prompt` 被包装成 `NewMessage` 对象
+- `is_from_me: false` 表示这是用户消息
+- `storeMessage()` 将消息存入数据库
+- `queue.enqueueMessageCheck()` 触发 agent 处理
+- Agent 正常响应，用户看到的是 agent 的回复
 
 **调用时机**: `main()` 函数中，channels 连接后立即调用：
 

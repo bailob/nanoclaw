@@ -319,10 +319,19 @@ Use available_groups.json to find the JID for a group. The folder name should be
 
 server.tool(
   'restart_service',
-  'Request the NanoClaw host process to restart. Use when applying configuration changes that require a service restart. Optionally provide a continuation_prompt that will be sent to the group after restart completes.',
+  `Request the NanoClaw host process to restart. Use when applying configuration changes that require a service restart.
+
+IMPORTANT: The continuation_prompt is a task instruction FOR YOU (the agent), not a message for the user. After restart, this prompt will be injected as a "user message" and you will respond to it normally.
+
+Example:
+- continuation_prompt: "Notify the user that the restart is complete"
+- continuation_prompt: "Continue the configuration task"
+- continuation_prompt: "Report the status of the group registration"
+
+The user will see YOUR RESPONSE to the continuation_prompt, not the prompt itself.`,
   {
     reason: z.string().describe('Why the restart is needed'),
-    continuation_prompt: z.string().optional().describe('Message to send to the group after the restart completes, so you can continue where you left off'),
+    continuation_prompt: z.string().optional().describe('Task instruction for yourself after restart (e.g., "Notify user restart complete", "Continue task X"). This will be sent to you as a user message after restart.'),
   },
   async (args) => {
     const ctx = getContext();
@@ -338,7 +347,7 @@ server.tool(
     writeIpcFile(TASKS_DIR, data);
 
     return {
-      content: [{ type: 'text' as const, text: `Restart requested: ${args.reason}. The service will restart shortly.${args.continuation_prompt ? ' A continuation message will be sent after restart.' : ''}` }],
+      content: [{ type: 'text' as const, text: `Restart requested: ${args.reason}. The service will restart shortly.${args.continuation_prompt ? ' You will receive a continuation task after restart.' : ''}` }],
     };
   },
 );

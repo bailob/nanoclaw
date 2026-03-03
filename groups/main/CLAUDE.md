@@ -221,20 +221,32 @@ When you make configuration changes that require a service restart (e.g., adding
 ```typescript
 restart_service({
   reason: "Added new group configuration",
-  continuation_prompt: "Configuration applied! The service has been restarted and is ready."
+  continuation_prompt: "Notify the user that the group registration is complete"
 })
 ```
 
 **Parameters**:
 - `reason` (required): Brief explanation of why the restart is needed
-- `continuation_prompt` (optional): Message to send to the chat after restart completes
+- `continuation_prompt` (optional): **A task instruction FOR YOU** after restart
+
+**IMPORTANT**: The `continuation_prompt` is NOT sent to the user directly. Instead:
+1. After restart, the prompt is injected as a "user message" to you
+2. You respond to it normally
+3. The user sees YOUR RESPONSE, not the original prompt
+
+**Example prompts**:
+- ✅ "Notify the user that the restart is complete"
+- ✅ "Report the status of the group registration"
+- ✅ "Continue the configuration task"
+- ❌ "The service has been restarted!" (this would be sent to you, not the user)
 
 **What happens**:
-1. The service saves your continuation message
+1. The service saves your continuation task
 2. Gracefully shuts down (SIGTERM)
 3. Service manager (launchd/systemd) automatically restarts it
-4. After restart, your continuation message is sent to the chat
-5. You can continue the conversation seamlessly
+4. After restart, your continuation task is injected as a user message
+5. You process it and respond normally
+6. The user sees your response
 
 **When to use**:
 - After modifying `registered_groups.json`
@@ -259,12 +271,15 @@ groups['tg:123456'] = {
 };
 fs.writeFileSync('/workspace/project/data/registered_groups.json', JSON.stringify(groups, null, 2));
 
-// 2. Request restart with continuation
+// 2. Request restart with continuation task
 restart_service({
   reason: "Added 'New Group' to registered groups",
-  continuation_prompt: "✅ New Group has been registered! I'll start responding to messages there now."
+  continuation_prompt: "Confirm to the user that 'New Group' has been registered and is now active"
 });
+
+// 3. After restart, you'll receive the continuation_prompt as a user message
+// 4. You respond: "✅ 'New Group' has been registered and is now active! I'll start responding to messages there."
+// 5. The user sees your response
 ```
 
-The user will see your continuation message after the restart, and you can continue helping them without interruption.
 

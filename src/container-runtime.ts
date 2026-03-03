@@ -10,7 +10,10 @@ import { logger } from './logger.js';
 export const CONTAINER_RUNTIME_BIN = 'docker';
 
 /** Returns CLI args for a readonly bind mount. */
-export function readonlyMountArgs(hostPath: string, containerPath: string): string[] {
+export function readonlyMountArgs(
+  hostPath: string,
+  containerPath: string,
+): string[] {
   return ['-v', `${hostPath}:${containerPath}:ro`];
 }
 
@@ -57,12 +60,18 @@ export function ensureContainerRuntimeRunning(): void {
 /** Kill orphaned NanoClaw containers from previous runs. */
 export function cleanupOrphans(): void {
   try {
-    const output = execSync(`${CONTAINER_RUNTIME_BIN} ps -a --filter "name=nanoclaw-" --format "{{.Names}}\t{{.Status}}"`, {
-      stdio: ['pipe', 'pipe', 'pipe'],
-      encoding: 'utf-8',
-    });
+    const output = execSync(
+      `${CONTAINER_RUNTIME_BIN} ps -a --filter "name=nanoclaw-" --format "{{.Names}}\t{{.Status}}"`,
+      {
+        stdio: ['pipe', 'pipe', 'pipe'],
+        encoding: 'utf-8',
+      },
+    );
 
-    const lines = output.trim().split('\n').filter(line => line);
+    const lines = output
+      .trim()
+      .split('\n')
+      .filter((line) => line);
     const orphans: string[] = [];
 
     for (const line of lines) {
