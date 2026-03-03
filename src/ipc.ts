@@ -170,6 +170,9 @@ export async function processTaskIpc(
     trigger?: string;
     requiresTrigger?: boolean;
     containerConfig?: RegisteredGroup['containerConfig'];
+    // For restart_service
+    reason?: string;
+    continuation_prompt?: string;
   },
   sourceGroup: string, // Verified identity from IPC directory
   isMain: boolean, // Verified from directory path
@@ -380,6 +383,48 @@ export async function processTaskIpc(
         );
       }
       break;
+
+    case 'restart_service': {
+      // Save continuation data and trigger a graceful restart
+      const registeredGroupsList = deps.registeredGroups();
+
+      // Resolve chatJid from source group
+      let restartChatJid: string | undefined;
+      for (const [jid, group] of Object.entries(registeredGroupsList)) {
+        if (group.folder === sourceGroup) {
+          restartChatJid = jid;
+          break;
+        }
+      }
+
+      if (data.continuation_prompt && restartChatJid) {
+        const pendingFile = path.join(DATA_DIR, 'pending-restart.json');
+        fs.writeFileSync(
+          pendingFile,
+          JSON.stringify({
+            chatJid: restartChatJid,
+            groupFolder: sourceGroup,
+            continuation_prompt: data.continuation_prompt,
+            reason: data.reason,
+            timestamp: new Date().toISOString(),
+          }),
+        );
+        logger.info(
+          { sourceGroup, reason: data.reason },
+          'Saved restart continuation data',
+        );
+      }
+
+      logger.info(
+        { sourceGroup, reason: data.reason },
+        'Restart requested via IPC, exiting for service manager to restart',
+      );
+      // Short delay to allow IPC file cleanup, then exit gracefully
+      setTimeout(() => {
+        process.kill(process.pid, 'SIGTERM');
+      }, 500);
+      break;
+    }
 
     default:
       logger.warn({ type: data.type }, 'Unknown IPC task type');

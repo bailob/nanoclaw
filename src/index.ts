@@ -3,6 +3,7 @@ import path from 'path';
 
 import {
   ASSISTANT_NAME,
+  DATA_DIR,
   IDLE_TIMEOUT,
   MAIN_GROUP_FOLDER,
   POLL_INTERVAL,
@@ -423,6 +424,41 @@ function ensureContainerSystemRunning(): void {
   cleanupOrphans();
 }
 
+/**
+ * Check for pending restart continuation messages.
+ * If the service was restarted via restart_service with a continuation_prompt,
+ * send the continuation message to the appropriate group.
+ */
+async function checkPendingRestart(): Promise<void> {
+  const pendingFile = path.join(DATA_DIR, 'pending-restart.json');
+  if (!fs.existsSync(pendingFile)) return;
+
+  try {
+    const data = JSON.parse(fs.readFileSync(pendingFile, 'utf-8'));
+    // Remove immediately to prevent re-sending on crash
+    fs.unlinkSync(pendingFile);
+
+    if (data.chatJid && data.continuation_prompt) {
+      const channel = findChannel(channels, data.chatJid);
+      if (channel) {
+        await channel.sendMessage(data.chatJid, data.continuation_prompt);
+        logger.info(
+          { chatJid: data.chatJid, groupFolder: data.groupFolder },
+          'Sent restart continuation message',
+        );
+      } else {
+        logger.warn(
+          { chatJid: data.chatJid },
+          'No channel found for restart continuation message',
+        );
+      }
+    }
+  } catch (err) {
+    logger.error({ err }, 'Error processing pending restart');
+    try { fs.unlinkSync(pendingFile); } catch { /* ignore */ }
+  }
+}
+
 async function main(): Promise<void> {
   ensureContainerSystemRunning();
   initDatabase();
@@ -461,6 +497,7 @@ async function main(): Promise<void> {
   }
 
   // Start subsystems (independently of connection handler)
+  await checkPendingRestart();
   startSchedulerLoop({
     registeredGroups: () => registeredGroups,
     getSessions: () => sessions,

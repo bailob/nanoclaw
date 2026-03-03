@@ -1,7 +1,7 @@
 # restart_service continuation_prompt 功能调试记录
 
-**日期**: 2026-03-02
-**状态**: 未解决
+**日期**: 2026-03-02 → 2026-03-03 已解决
+**状态**: 已解决
 **优先级**: 中
 
 ## 问题描述
@@ -200,6 +200,48 @@ node scripts/test-message.cjs "@Andy 测试消息" main
 - SDK是否使用了特殊的进程启动方式？
 - 是否有环境变量白名单机制？
 - 容器环境是否影响了环境变量传递？
+
+## 最终解决方案 (2026-03-03)
+
+采用了方向1（IPC文件方案），具体实现：
+
+### 1. agent-runner 写入 context 文件
+在 `container/agent-runner/src/index.ts` 中，SDK 启动前写入 `/workspace/ipc/context.json`：
+```typescript
+fs.writeFileSync('/workspace/ipc/context.json', JSON.stringify({
+  chatJid: containerInput.chatJid,
+  groupFolder: containerInput.groupFolder,
+  isMain: containerInput.isMain,
+}));
+```
+
+### 2. MCP Server 使用 getContext() 懒加载
+在 `ipc-mcp-stdio.ts` 中，用 `getContext()` 函数替代模块顶层的环境变量读取：
+- 优先从 `/workspace/ipc/context.json` 读取
+- 失败时降级到环境变量
+- 缓存结果，只读取一次
+
+### 3. 添加 restart_service 工具
+MCP Server 新增 `restart_service` 工具，写入 IPC task 文件。
+
+### 4. Host IPC 处理 restart_service
+`src/ipc.ts` 新增 `restart_service` case：
+- 从 sourceGroup 反查 chatJid
+- 保存 continuation 数据到 `data/pending-restart.json`
+- 发送 SIGTERM 触发优雅重启
+
+### 5. 启动时检查 pending continuation
+`src/index.ts` 在 channels 连接后调用 `checkPendingRestart()`：
+- 读取并删除 `data/pending-restart.json`
+- 通过对应 channel 发送 continuation 消息
+
+### 关键洞察
+环境变量传递失败的根本原因未完全确认，但 context 文件方案更可靠因为：
+- 不依赖 SDK 的 env 传递机制
+- `/workspace/ipc` 是已 mount 的目录
+- agent-runner 在 SDK 启动前写入，MCP Server 在工具调用时读取，时序正确
+
+## 以下为历史调试记录
 
 ## 可能的解决方向
 

@@ -211,3 +211,60 @@ When scheduling tasks for other groups, use the `target_group_jid` parameter wit
 - `schedule_task(prompt: "...", schedule_type: "cron", schedule_value: "0 9 * * 1", target_group_jid: "-1001234567890")`
 
 The task will run in that group's context with access to their files and memory.
+
+---
+
+## Service Restart
+
+When you make configuration changes that require a service restart (e.g., adding a new group, modifying triggers), use the `restart_service` tool:
+
+```typescript
+restart_service({
+  reason: "Added new group configuration",
+  continuation_prompt: "Configuration applied! The service has been restarted and is ready."
+})
+```
+
+**Parameters**:
+- `reason` (required): Brief explanation of why the restart is needed
+- `continuation_prompt` (optional): Message to send to the chat after restart completes
+
+**What happens**:
+1. The service saves your continuation message
+2. Gracefully shuts down (SIGTERM)
+3. Service manager (launchd/systemd) automatically restarts it
+4. After restart, your continuation message is sent to the chat
+5. You can continue the conversation seamlessly
+
+**When to use**:
+- After modifying `registered_groups.json`
+- After changing service configuration files
+- When instructed to "restart the service" or "apply changes"
+
+**When NOT to use**:
+- For code changes in group folders (no restart needed)
+- For scheduling tasks (they're picked up automatically)
+- For sending messages (use `send_message` instead)
+
+**Example workflow**:
+
+```typescript
+// 1. Make configuration change
+const groups = JSON.parse(fs.readFileSync('/workspace/project/data/registered_groups.json', 'utf-8'));
+groups['tg:123456'] = {
+  name: "New Group",
+  folder: "new-group",
+  trigger: "@Andy",
+  added_at: new Date().toISOString()
+};
+fs.writeFileSync('/workspace/project/data/registered_groups.json', JSON.stringify(groups, null, 2));
+
+// 2. Request restart with continuation
+restart_service({
+  reason: "Added 'New Group' to registered groups",
+  continuation_prompt: "✅ New Group has been registered! I'll start responding to messages there now."
+});
+```
+
+The user will see your continuation message after the restart, and you can continue helping them without interruption.
+

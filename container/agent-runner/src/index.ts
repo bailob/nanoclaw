@@ -55,6 +55,7 @@ interface SDKUserMessage {
   session_id: string;
 }
 
+const IPC_DIR = '/workspace/ipc';
 const IPC_INPUT_DIR = '/workspace/ipc/input';
 const IPC_INPUT_CLOSE_SENTINEL = path.join(IPC_INPUT_DIR, '_close');
 const IPC_POLL_MS = 500;
@@ -520,6 +521,15 @@ async function main(): Promise<void> {
 
   let sessionId = containerInput.sessionId;
   fs.mkdirSync(IPC_INPUT_DIR, { recursive: true });
+
+  // Write context file for MCP server to read (reliable alternative to env vars)
+  const contextFile = path.join(IPC_DIR, 'context.json');
+  fs.writeFileSync(contextFile, JSON.stringify({
+    chatJid: containerInput.chatJid,
+    groupFolder: containerInput.groupFolder,
+    isMain: containerInput.isMain,
+  }));
+  log(`Wrote context file: ${contextFile}`);
 
   // Clean up stale _close sentinel from previous container runs
   try { fs.unlinkSync(IPC_INPUT_CLOSE_SENTINEL); } catch { /* ignore */ }

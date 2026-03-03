@@ -1,7 +1,8 @@
 /**
  * Stdio MCP Server for NanoClaw
  * Standalone process that agent teams subagents can inherit.
- * Reads context from environment variables, writes IPC files for the host.
+ * Reads context from /workspace/ipc/context.json (with env var fallback).
+ * Writes IPC files for the host.
  */
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -15,10 +16,40 @@ const IPC_DIR = '/workspace/ipc';
 const MESSAGES_DIR = path.join(IPC_DIR, 'messages');
 const TASKS_DIR = path.join(IPC_DIR, 'tasks');
 
-// Context from environment variables (set by the agent runner)
-const chatJid = process.env.NANOCLAW_CHAT_JID!;
-const groupFolder = process.env.NANOCLAW_GROUP_FOLDER!;
-const isMain = process.env.NANOCLAW_IS_MAIN === '1';
+// Lazy-loaded context: reads from context file (written by agent-runner)
+// with fallback to environment variables
+interface Context {
+  chatJid: string;
+  groupFolder: string;
+  isMain: boolean;
+}
+
+let _context: Context | null = null;
+
+function getContext(): Context {
+  if (_context) return _context;
+
+  // Try context file first (reliable — doesn't depend on SDK env passing)
+  try {
+    const data = JSON.parse(fs.readFileSync(path.join(IPC_DIR, 'context.json'), 'utf-8'));
+    if (data.chatJid && data.groupFolder) {
+      _context = {
+        chatJid: data.chatJid,
+        groupFolder: data.groupFolder,
+        isMain: !!data.isMain,
+      };
+      return _context;
+    }
+  } catch { /* fall through to env vars */ }
+
+  // Fallback to environment variables
+  _context = {
+    chatJid: process.env.NANOCLAW_CHAT_JID || '',
+    groupFolder: process.env.NANOCLAW_GROUP_FOLDER || '',
+    isMain: process.env.NANOCLAW_IS_MAIN === '1',
+  };
+  return _context;
+}
 
 function writeIpcFile(dir: string, data: object): string {
   fs.mkdirSync(dir, { recursive: true });
@@ -47,12 +78,13 @@ server.tool(
     sender: z.string().optional().describe('Your role/identity name (e.g. "Researcher"). When set, messages appear from a dedicated bot in Telegram.'),
   },
   async (args) => {
+    const ctx = getContext();
     const data: Record<string, string | undefined> = {
       type: 'message',
-      chatJid,
+      chatJid: ctx.chatJid,
       text: args.text,
       sender: args.sender || undefined,
-      groupFolder,
+      groupFolder: ctx.groupFolder,
       timestamp: new Date().toISOString(),
     };
 
@@ -128,7 +160,8 @@ SCHEDULE VALUE FORMAT (all times are LOCAL timezone):
     }
 
     // Non-main groups can only schedule for themselves
-    const targetJid = isMain && args.target_group_jid ? args.target_group_jid : chatJid;
+    const ctx = getContext();
+    const targetJid = ctx.isMain && args.target_group_jid ? args.target_group_jid : ctx.chatJid;
 
     const data = {
       type: 'schedule_task',
@@ -137,7 +170,7 @@ SCHEDULE VALUE FORMAT (all times are LOCAL timezone):
       schedule_value: args.schedule_value,
       context_mode: args.context_mode || 'group',
       targetJid,
-      createdBy: groupFolder,
+      createdBy: ctx.groupFolder,
       timestamp: new Date().toISOString(),
     };
 
@@ -163,9 +196,10 @@ server.tool(
 
       const allTasks = JSON.parse(fs.readFileSync(tasksFile, 'utf-8'));
 
-      const tasks = isMain
+      const ctx = getContext();
+      const tasks = ctx.isMain
         ? allTasks
-        : allTasks.filter((t: { groupFolder: string }) => t.groupFolder === groupFolder);
+        : allTasks.filter((t: { groupFolder: string }) => t.groupFolder === ctx.groupFolder);
 
       if (tasks.length === 0) {
         return { content: [{ type: 'text' as const, text: 'No scheduled tasks found.' }] };
@@ -192,11 +226,12 @@ server.tool(
   'Pause a scheduled task. It will not run until resumed.',
   { task_id: z.string().describe('The task ID to pause') },
   async (args) => {
+    const ctx = getContext();
     const data = {
       type: 'pause_task',
       taskId: args.task_id,
-      groupFolder,
-      isMain,
+      groupFolder: ctx.groupFolder,
+      isMain: ctx.isMain,
       timestamp: new Date().toISOString(),
     };
 
@@ -211,11 +246,12 @@ server.tool(
   'Resume a paused task.',
   { task_id: z.string().describe('The task ID to resume') },
   async (args) => {
+    const ctx = getContext();
     const data = {
       type: 'resume_task',
       taskId: args.task_id,
-      groupFolder,
-      isMain,
+      groupFolder: ctx.groupFolder,
+      isMain: ctx.isMain,
       timestamp: new Date().toISOString(),
     };
 
@@ -230,11 +266,12 @@ server.tool(
   'Cancel and delete a scheduled task.',
   { task_id: z.string().describe('The task ID to cancel') },
   async (args) => {
+    const ctx = getContext();
     const data = {
       type: 'cancel_task',
       taskId: args.task_id,
-      groupFolder,
-      isMain,
+      groupFolder: ctx.groupFolder,
+      isMain: ctx.isMain,
       timestamp: new Date().toISOString(),
     };
 
@@ -256,7 +293,7 @@ Use available_groups.json to find the JID for a group. The folder name should be
     trigger: z.string().describe('Trigger word (e.g., "@Andy")'),
   },
   async (args) => {
-    if (!isMain) {
+    if (!getContext().isMain) {
       return {
         content: [{ type: 'text' as const, text: 'Only the main group can register new groups.' }],
         isError: true,
@@ -276,6 +313,32 @@ Use available_groups.json to find the JID for a group. The folder name should be
 
     return {
       content: [{ type: 'text' as const, text: `Group "${args.name}" registered. It will start receiving messages immediately.` }],
+    };
+  },
+);
+
+server.tool(
+  'restart_service',
+  'Request the NanoClaw host process to restart. Use when applying configuration changes that require a service restart. Optionally provide a continuation_prompt that will be sent to the group after restart completes.',
+  {
+    reason: z.string().describe('Why the restart is needed'),
+    continuation_prompt: z.string().optional().describe('Message to send to the group after the restart completes, so you can continue where you left off'),
+  },
+  async (args) => {
+    const ctx = getContext();
+    const data = {
+      type: 'restart_service',
+      reason: args.reason,
+      continuation_prompt: args.continuation_prompt,
+      chatJid: ctx.chatJid,
+      groupFolder: ctx.groupFolder,
+      timestamp: new Date().toISOString(),
+    };
+
+    writeIpcFile(TASKS_DIR, data);
+
+    return {
+      content: [{ type: 'text' as const, text: `Restart requested: ${args.reason}. The service will restart shortly.${args.continuation_prompt ? ' A continuation message will be sent after restart.' : ''}` }],
     };
   },
 );
